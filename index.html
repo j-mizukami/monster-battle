@@ -291,7 +291,7 @@
   <div class="modal-card">
     <h2>QR内容から追加</h2>
     <p class="small">QRコードの中身を貼り付けてください。JSON形式に対応しています。</p>
-    <video id="qrVideo" class="camera-preview" playsinline muted></video>
+    <div id="qrReader" class="camera-preview"></div>
     <button id="startCameraQrBtn" class="secondary">カメラでQR読み込み</button>
     <button id="stopCameraQrBtn" class="danger" style="display:none;">カメラ停止</button>
     <textarea id="qrText" class="qr-input" placeholder='例: {"name":"ピカロン","icon":"⚡","maxHp":220,"atk":75,"speed":90}'></textarea>
@@ -300,6 +300,8 @@
   </div>
 </div>
 
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script>
 'use strict';
 
@@ -372,9 +374,9 @@ const addQrMonsterBtn = document.getElementById('addQrMonsterBtn');
 const closeQrBtn = document.getElementById('closeQrBtn');
 const startCameraQrBtn = document.getElementById('startCameraQrBtn');
 const stopCameraQrBtn = document.getElementById('stopCameraQrBtn');
-const qrVideo = document.getElementById('qrVideo');
-let qrCameraStream = null;
-let qrScanTimer = null;
+const qrReader = document.getElementById('qrReader');
+let html5QrCode = null;
+let qrScannerRunning = false;
 const captureResults = document.getElementById('captureResults');
 
 window.addEventListener('error', function (e) {
@@ -799,64 +801,63 @@ function setQrTextAndAdd(text) {
 }
 
 async function startCameraQrScan() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    log('この環境ではカメラ読み込みに対応していません。QR内容を貼り付けてください。');
+  if (!window.Html5Qrcode) {
+    log('html5-qrcodeライブラリを読み込めませんでした。インターネット接続を確認してください。');
     return;
   }
 
-  if (!('BarcodeDetector' in window)) {
-    log('このブラウザではQR自動検出に対応していません。QR内容を貼り付けてください。');
-    return;
-  }
+  if (qrScannerRunning) return;
 
   try {
-    qrCameraStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
-      audio: false
-    });
-
-    qrVideo.srcObject = qrCameraStream;
-    qrVideo.classList.add('show');
+    qrReader.classList.add('show');
+    qrReader.style.display = 'block';
     startCameraQrBtn.disabled = true;
     stopCameraQrBtn.style.display = 'block';
-    await qrVideo.play();
 
-    const detector = new BarcodeDetector({ formats: ['qr_code'] });
+    html5QrCode = new Html5Qrcode('qrReader');
 
-    qrScanTimer = setInterval(async () => {
-      try {
-        const codes = await detector.detect(qrVideo);
-        if (codes && codes.length > 0) {
-          const value = codes[0].rawValue || '';
-          stopCameraQrScan();
-          log('QRコードを読み込みました。');
-          setQrTextAndAdd(value);
-        }
-      } catch (error) {
-        // 読み取り中の一時エラーは無視
+    await html5QrCode.start(
+      { facingMode: 'environment' },
+      {
+        fps: 10,
+        qrbox: { width: 240, height: 240 }
+      },
+      async (decodedText) => {
+        await stopCameraQrScan();
+        log('QRコードを読み込みました。');
+        setQrTextAndAdd(decodedText);
+      },
+      () => {
+        // 読み取り失敗フレームは無視
       }
-    }, 500);
+    );
+
+    qrScannerRunning = true;
   } catch (error) {
-    log('カメラを起動できませんでした。許可設定を確認してください。');
-    stopCameraQrScan();
+    log('カメラを起動できませんでした。HTTPSで開くか、カメラ許可を確認してください。');
+    await stopCameraQrScan();
   }
 }
 
-function stopCameraQrScan() {
-  if (qrScanTimer) {
-    clearInterval(qrScanTimer);
-    qrScanTimer = null;
+async function stopCameraQrScan() {
+  try {
+    if (html5QrCode && qrScannerRunning) {
+      await html5QrCode.stop();
+      await html5QrCode.clear();
+    } else if (html5QrCode) {
+      await html5QrCode.clear();
+    }
+  } catch (error) {
+    // 停止時の一時エラーは無視
   }
 
-  if (qrCameraStream) {
-    qrCameraStream.getTracks().forEach(track => track.stop());
-    qrCameraStream = null;
-  }
+  html5QrCode = null;
+  qrScannerRunning = false;
 
-  if (qrVideo) {
-    qrVideo.pause();
-    qrVideo.srcObject = null;
-    qrVideo.classList.remove('show');
+  if (qrReader) {
+    qrReader.innerHTML = '';
+    qrReader.classList.remove('show');
+    qrReader.style.display = 'none';
   }
 
   if (startCameraQrBtn) startCameraQrBtn.disabled = false;
